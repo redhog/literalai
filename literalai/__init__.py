@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 from typing import Optional, Tuple, List, Dict
+import argparse
 
 # LLM imports
 import litellm
@@ -195,9 +196,12 @@ def process_directory(root_dir: str):
                 print(f"Processing {filepath}")
                 process_file(filepath)
 
-if __name__ == "__main__":
-    import argparse
+def main():
     parser = argparse.ArgumentParser(description="Regenerate Python functions/classes with docstring verification.")
     parser.add_argument("source_dir", help="Root directory of Python source code")
     args = parser.parse_args()
     process_directory(args.source_dir)
+                
+if __name__ == "__main__":
+    main()
+    
