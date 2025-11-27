@@ -5,13 +5,11 @@ import os
 import re
 from typing import Optional, Tuple, List, Dict
 import argparse
+import tokenize
 
 # LLM imports
 import litellm
-from litellm import OpenAI
-
-# Initialize LLM
-llm = OpenAI(model="gpt-4")
+from litellm import text_completion
 
 CODEID_PATTERN = re.compile(r"#\s*CODEID=([0-9a-f]+)")
 
@@ -31,7 +29,7 @@ def extract_comments_before(node, atok: asttokens.ASTTokens) -> str:
     tokens = atok.get_tokens(node)
     comments = []
     for tok in tokens:
-        if tok.type == asttokens.tokenize.COMMENT:
+        if tok.type == tokenize.COMMENT:
             if not CODEID_PATTERN.search(tok.string):
                 comments.append(tok.string.lstrip("#").strip())
     return "\n".join(comments)
@@ -61,8 +59,8 @@ def regenerate_function(signature_doc_comment: str) -> str:
         f"{signature_doc_comment}\n\n"
         "Provide only valid Python code."
     )
-    response = llm.generate(prompt)
-    return response.strip()
+    response = text_completion(model="openai/gpt-4", prompt=prompt)
+    return response.choices[0].text.strip()
 
 
 def regenerate_class(node: ast.ClassDef, atok: asttokens.ASTTokens) -> str:
@@ -109,8 +107,8 @@ Return structured output:
 """
     
     # --- Step 4: Call LLM ---
-    response = llm.generate(prompt)
-    llm_result = parse_llm_output(response)
+    response = text_completion(model="openai/gpt-4", prompt=prompt)
+    llm_result = parse_llm_output(response.choices[0].text)
     
     # --- Step 6: Update the AST ---
     # Delete methods
@@ -146,47 +144,99 @@ Return structured output:
 
 
 def process_node(node: ast.AST, atok: asttokens.ASTTokens) -> Tuple[str, str]:
-    """Returns new code for node and new codeid."""
+    """Returns new code for node."""
+    
+    if not isinstance(node, ast.FunctionDef) and not isinstance(node, ast.ClassDef):
+        return None
+    
     sig_doc_comment = concat_signature_doc_comment(node, atok)
-    # Extract existing CODEID
     tokens = list(atok.get_tokens(node))
     codeid_token = None
     for tok in reversed(tokens):
-        if tok.type == asttokens.tokenize.COMMENT and CODEID_PATTERN.search(tok.string):
+        if tok.type == tokenize.COMMENT and CODEID_PATTERN.search(tok.string):
             codeid_token = tok.string
             break
     existing_codeid = get_codeid_from_comment(codeid_token)
     calculated_hash = sha_hash(sig_doc_comment)
     if existing_codeid == calculated_hash:
-        # No change needed
-        return atok.get_text(node), existing_codeid
-    # Regenerate
+        return None
+    
     if isinstance(node, ast.FunctionDef):
         new_code = regenerate_function(sig_doc_comment)
     elif isinstance(node, ast.ClassDef):
         new_code = regenerate_class(node, atok)
     else:
         return atok.get_text(node), existing_codeid
-    # Append new CODEID
     new_code += f"\n#CODEID={calculated_hash}"
-    return new_code, calculated_hash
+    return new_code
+
+def transform_source(source, process_node):
+    """
+    Recursively walk the AST of `source`, applying `process_node` to each node.
+    If `process_node(node)` returns a string, replace that node in the source
+    with the returned code snippet and update AST positions.
+    
+    Returns the transformed source code.
+    """
+    atok = asttokens.ASTTokens(source, parse=True)
+    root = atok.tree
+
+    def recurse(node):
+        nonlocal atok, root, source
+
+        # Try to process the current node
+        new_code = process_node(node, atok)
+        if new_code is not None:
+            # Replace the code in the original source
+            start, end = atok.get_text_range(node, atok)
+            old_source = source
+            source = source[:start] + new_code + source[end:]
+
+            print("===={old}====")
+            print(old_source)
+            print("===={new}====")
+            print(source)
+            print()
+            print()
+            
+            # Re-parse the updated source to update AST positions
+            try:
+                atok = asttokens.ASTTokens(source, parse=True)
+            except Exception as e:
+                raise Exception("%s:\n================\n%s\n================\n" % (e, source)) from e
+            
+            root = atok.tree
+            
+            # Return the new node corresponding to the inserted code
+            new_node = ast.parse(new_code).body[0]
+            atok.mark_tokens(new_node)  # Ensure new node has token positions
+            return new_node
+        
+        # Recurse into child nodes
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, ast.AST):
+                        new_item = recurse(item)
+                        if new_item is not None:
+                            value[i] = new_item
+            elif isinstance(value, ast.AST):
+                new_value = recurse(value)
+                if new_value is not None:
+                    setattr(node, field, new_value)
+        return None
+
+    recurse(root)
+    return source
 
 def process_file(filepath: str):
     with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
-    atok = asttokens.ASTTokens(source, parse=True)
-    tree = atok.tree
-    new_source = source
-    # We will process top-level nodes only
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-            new_code, new_codeid = process_node(node, atok)
-            # Replace old code with new code
-            start, end = atok.get_text_range(node)
-            new_source = new_source[:start] + new_code + new_source[end:]
-    # Write back
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(new_source)
+    new_source = transform_source(source, process_node)
+    print("===={new source}====")
+    print(new_source)
+    #with open(filepath, "w", encoding="utf-8") as f:
+    #    f.write(new_source)
 
 def process_directory(root_dir: str):
     for dirpath, _, filenames in os.walk(root_dir):

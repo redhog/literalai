@@ -10,6 +10,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "litellm>=1.0.0",
+        "asttokens"
     ],
     include_package_data=True,
     entry_points={
