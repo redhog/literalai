@@ -1,5 +1,6 @@
-def add_two(a, b):
-    """Add two numbers together, return the result"""
+if True:
+    def add_two(a, b):
+        """Add two numbers together, return the result"""
 
 def generate_slug(s):
     """Generate a slug (a string that's a valid python variable name,
