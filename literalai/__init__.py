@@ -58,6 +58,11 @@ output.
         if codeid == old_codeid:
             return None
 
+        if not signature.strip():
+            import pdb
+            pdb.set_trace()
+        
+        
         new_body = set_indent(self.generate_FunctionDef(signature), indent)
 
         replacement = f"{signature}\n{indent}# CODEID:{codeid}\n{new_body}"

@@ -1,69 +1,87 @@
 import libcst as cst
+from libcst.metadata import MetadataWrapper, PositionProvider
 from typing import List, Tuple
+
 
 def extract_fn_signature(func_def: cst.FunctionDef) -> Tuple[List[str], str]:
     """
-    Extracts function signature, comments, docstring, and post-docstring comments
-    from a libcst.FunctionDef node, preserving indentation and formatting.
-
-    Returns:
-        parts: List of strings [signature, leading_comments..., docstring, post_docstring_comments...]
-        indentation: The string used for indentation of the function body
+    Extract lines from function start up to the first real statement,
+    skipping Pass and docstrings.
     """
-    parts: List[str] = []
 
-    # Temporary module to generate exact code snippets
-    module = cst.Module([])
+    # Get full source of the function
+    source = cst.Module([func_def]).code_for_node(func_def)
 
-    # 1. Signature (including original formatting)
-    full_func_code = module.code_for_node(func_def)
-    signature_line = full_func_code.split(":", 1)[0] + ":"
-    parts.append(signature_line)
+    # Get full source of the function
+    source_lines = source.splitlines()
 
-    # 2. Leading comments (before the function, include indentation)
-    for line in func_def.leading_lines:
-        if line.comment:
-            indent = line.indent.value if line.indent else ""
-            parts.append(f"{indent}{line.comment.value}")
+    # Wrap the module for metadata
+    module = cst.parse_module(source)
+    wrapper = MetadataWrapper(module)
+    pos_map = wrapper.resolve(PositionProvider)
+    func_node = wrapper.module.body[0]
 
-    # 3. Docstring (including quotes and indentation)
-    docstring_node = None
-    body_statements = func_def.body.body
-    if body_statements:
-        first_stmt = body_statements[0]
-        if isinstance(first_stmt, cst.SimpleStatementLine) and first_stmt.body:
-            expr = first_stmt.body[0]
-            if isinstance(expr, cst.Expr) and isinstance(expr.value, cst.SimpleString):
-                docstring_node = expr.value
-                # include indentation before docstring
-                indent = first_stmt.leading_lines[0].indent.value if first_stmt.leading_lines else " " * 4
-                docstring_code = module.code_for_node(docstring_node)
-                docstring_lines = docstring_code.splitlines()
-                docstring_with_indent = "\n".join([indent + line if line.strip() else line for line in docstring_lines])
-                parts.append(docstring_with_indent)
+    # Find first real statement
+    first_real_stmt = None
+    for stmt in func_node.body.body:
+        # Skip Pass
+        if isinstance(stmt, cst.Pass):
+            continue
+        # Skip docstring
+        if (
+            isinstance(stmt, cst.SimpleStatementLine)
+            and len(stmt.body) == 1
+            and isinstance(stmt.body[0], cst.Expr)
+            and isinstance(stmt.body[0].value, cst.SimpleString)
+        ):
+            continue
+        first_real_stmt = stmt
+        break
 
-    # 4. Comments after docstring but before real code
-    post_doc_comments = []
-    start_idx = 1 if docstring_node else 0
-    for stmt in body_statements[start_idx:]:
-        if isinstance(stmt, cst.SimpleStatementLine):
-            for line in stmt.leading_lines:
-                if line.comment:
-                    indent = line.indent.value if line.indent else ""
-                    post_doc_comments.append(f"{indent}{line.comment.value}")
-            # Stop at first non-pass statement
-            if not all(isinstance(s, cst.Pass) for s in stmt.body):
-                break
-    parts.extend(post_doc_comments)
-
-    # 5. Indentation for function body (detect from first real statement)
-    indentation = " " * 4  # default
-    if body_statements:
-        first_stmt = body_statements[0]
-        if first_stmt.leading_lines:
-            for line in first_stmt.leading_lines:
-                if line.indent:
-                    indentation = line.indent.value
+    # Determine start line
+    start_line = None
+    if first_real_stmt:
+        # Try metadata on the node itself
+        if first_real_stmt in pos_map:
+            start_line = pos_map[first_real_stmt].start.line
+        else:
+            # fallback: first child in metadata
+            for child in first_real_stmt.children:
+                if child in pos_map:
+                    start_line = pos_map[child].start.line
                     break
+        # final fallback: assume first line after def
+        if start_line is None:
+            start_line = 2  # relative to code_for_node
+    else:
+        start_line = len(source_lines) + 1  # no real statements
+
+    # Slice lines up to first real statement
+    parts = source_lines[: start_line - 1]
+
+    # Determine indentation
+    if first_real_stmt and start_line <= len(source_lines):
+        line = source_lines[start_line - 1]
+        stripped = line.lstrip()
+        indentation = line[: len(line) - len(stripped)]
+    else:
+        indentation = " " * 4
 
     return parts, indentation
+
+# Example
+if __name__ == "__main__":
+    code = """
+def test(x: int) -> str:
+    # Docstrings are important
+    '''My docstring'''
+    # Some other comment
+
+    return str(x + 1)
+"""
+    module = cst.parse_module(code)
+    func_node = module.body[0]
+    parts, indent = extract_fn_signature(func_node)
+    print("Indent:", repr(indent))
+    for part in parts:
+        print(repr(part))
