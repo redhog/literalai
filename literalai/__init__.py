@@ -59,11 +59,15 @@ signature, docstring, and initial comments.
             old_codeid = signature[-1].split("CODEID:")[1].strip()
             signature = signature[:-1]
         signature = "\n".join(signature)
+
+        # Manual function
+        if old_codeid is None and "".join(body).strip():
+            return None
         
         codeid = sha_hash(signature)
         if codeid == old_codeid:
             return None        
-
+        
         llm_result = self.generate_FunctionDef(signature)
         
         #print("===={llm}====")
