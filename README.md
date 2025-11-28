@@ -22,7 +22,7 @@ def manual(x):
 
 and run `literalai .`
 
-The file will now be update to
+The file will then be updated to contain
 
 ```python
 def add_two(a, b):
