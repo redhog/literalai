@@ -7,7 +7,7 @@ import litellm
 from litellm import text_completion
 import libcst as cst
 from libcst import CSTTransformer, parse_module, parse_expression
-from .extract import extract_fn_signature
+from .extract import extract_fn_signature, ExtractImportsFn
 from .indent import set_indent
 
 CODEID_PATTERN = re.compile(r"#\s*CODEID=([0-9a-f]+)")
@@ -20,7 +20,9 @@ class TransformCode(CSTTransformer):
     def transform_code(cls, src):
         return parse_module(src).visit(cls()).code
 
-    
+    def __init__(self):
+        self.imports: Set[cst.SimpleStatementLine] = set()
+
     
     def leave_FunctionDef(self, original_node, updated_node):
         replacement = self.replace_FunctionDef(original_node)
@@ -34,21 +36,25 @@ Generate the python source code for a function with the following
 signature, docstring, and initial comments.
 
 {signature}
-        
-Provide only valid python code for the function body. Do not include
-function signature, the docstring or comments given above in the
-output.
+
+# IMPORTANT
+ * Write the full function implementation.
+ * Provide only valid python for a single function as output.
+ * Do NOT add any initial description, argument or similar
 """
 
-        print("===={prompt}====")
-        print(prompt)
-        print("===={/prompt}====")
         response = text_completion(model="openai/gpt-4", prompt=prompt)
-        return response.choices[0].text
+        llm_result = response.choices[0].text.strip()
+        
+        if "```python" in llm_result:
+            llm_result = llm_result.split("```python", 1)[1]
+            llm_result = llm_result.rsplit("```", 1)[0]
+
+        return llm_result
     
     def replace_FunctionDef(self, node):
-        signature, indent = extract_fn_signature(node)
-        old_codeid = None
+        signature, body, indent = extract_fn_signature(node)
+        old_codeid = None        
         if "CODEID:" in signature[-1]:
             old_codeid = signature[-1].split("CODEID:")[1].strip()
             signature = signature[:-1]
@@ -56,18 +62,29 @@ output.
         
         codeid = sha_hash(signature)
         if codeid == old_codeid:
-            return None
+            return None        
 
-        if not signature.strip():
-            import pdb
-            pdb.set_trace()
+        llm_result = self.generate_FunctionDef(signature)
         
-        
-        new_body = set_indent(self.generate_FunctionDef(signature), indent)
+        #print("===={llm}====")
+        #print(llm_result)
 
+        llm_code = ExtractImportsFn.run(llm_result)
+        self.imports.update(llm_code["imports"])
+        
+        new_signature, new_body, _ = extract_fn_signature(llm_code["fn"])
+        new_body = '\n'.join(new_body)
         replacement = f"{signature}\n{indent}# CODEID:{codeid}\n{new_body}"
 
         print("===={generate}====")
+        print("----{imports}----")
+        print("\n".join([cst.Module([imp]).code_for_node(imp) for imp in llm_code["imports"]]))
+        print("----{signature}----")
+        print(signature)
+        print("----{hash}----")
+        print("Old:", old_codeid)
+        print("New:", codeid)
+        print("----{output}----")
         print(replacement)
         
         return cst.parse_statement(
@@ -75,15 +92,20 @@ output.
     
     def replace_cls(self, node):
         return None
-
+    
+    def leave_Module(self, original_node: cst.Module, updated_node: cst.Module):
+        return updated_node.with_changes(
+            body=list(self.imports) + list(updated_node.body)
+        )    
+    
 def process_file(filepath: str):
     with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
     new_source = TransformCode.transform_code(source)
-    print("===={new source}====")
-    print(new_source)
-    #with open(filepath, "w", encoding="utf-8") as f:
-    #    f.write(new_source)
+    # print("===={new source}====")
+    # print(new_source)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_source)
 
 def process_directory(root_dir: str):
     for dirpath, _, filenames in os.walk(root_dir):

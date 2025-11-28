@@ -1,6 +1,41 @@
 import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+
+class ExtractImportsFn(cst.CSTVisitor):
+    def __init__(self):
+        self.imports: List[cst.CSTNode] = []
+        self.function_node: Optional[cst.FunctionDef] = None
+
+    def ensure_import_newline(self, node: cst.CSTNode) -> cst.CSTNode:
+        # Only modify Import / ImportFrom nodes
+        if isinstance(node, (cst.Import, cst.ImportFrom)):
+            return cst.SimpleStatementLine(
+                body=[node],
+                trailing_whitespace=cst.TrailingWhitespace(
+                    whitespace=cst.SimpleWhitespace(""),  # spaces before comment
+                    comment=None,
+                    newline=cst.Newline()                  # the newline after the statement
+                )
+            )
+        return node
+        
+    def visit_Import(self, node: cst.Import) -> None:
+        self.imports.append(self.ensure_import_newline(node))
+
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
+        self.imports.append(self.ensure_import_newline(node))
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> None:
+        self.function_node = node
+
+    @classmethod
+    def run(cls, code: str):
+        module = cst.parse_module(code)
+        extractor = cls()
+        module.visit(extractor)
+        return {"fn": extractor.function_node, "imports": extractor.imports}
 
 
 def extract_fn_signature(func_def: cst.FunctionDef) -> Tuple[List[str], str]:
@@ -58,7 +93,12 @@ def extract_fn_signature(func_def: cst.FunctionDef) -> Tuple[List[str], str]:
 
     # Slice lines up to first real statement
     parts = source_lines[: start_line - 1]
+    body = source_lines[start_line - 1:]
 
+    # Remove any empty lines after the last comment/docstring
+    while parts and not parts[-1].strip():
+        parts = parts[:-1]
+    
     # Determine indentation
     if first_real_stmt and start_line <= len(source_lines):
         line = source_lines[start_line - 1]
@@ -66,8 +106,8 @@ def extract_fn_signature(func_def: cst.FunctionDef) -> Tuple[List[str], str]:
         indentation = line[: len(line) - len(stripped)]
     else:
         indentation = " " * 4
-
-    return parts, indentation
+    
+    return parts, body, indentation
 
 # Example
 if __name__ == "__main__":
@@ -76,12 +116,16 @@ def test(x: int) -> str:
     # Docstrings are important
     '''My docstring'''
     # Some other comment
-
+    
     return str(x + 1)
 """
     module = cst.parse_module(code)
     func_node = module.body[0]
-    parts, indent = extract_fn_signature(func_node)
+    header, body, indent = extract_fn_signature(func_node)
     print("Indent:", repr(indent))
-    for part in parts:
+    print("===={Header}=====")
+    for part in header:
+        print(repr(part))
+    print("===={Body}=====")
+    for part in body:
         print(repr(part))
