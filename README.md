@@ -5,7 +5,7 @@ Literal ai is a way to store your prompts *inside* your project, and check them 
 
 ## How it works
 Any function that only has a docstring and/or initial comments, will be generated when `literalai` is run on your project, and any function that was generated this way, will be updated if you change the signature, docstring and/or comments.
-The LLM prompt will include the function signature, docstring and any initial comments.
+The LLM prompt will include the function signature, docstring and any initial comments. Literal ai does not store any metadata or state outside of your sourcecode, and the only state it stores is a hash of the signature/docstring/comments, as an extra comment inside functions it generate.
 
 ## Example
 
