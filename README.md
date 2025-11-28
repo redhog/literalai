@@ -1,9 +1,9 @@
 <img arc="logo.jpeg" float="right">
 
-# LiteralAI for Python
+# LiteralAI compiler for Python
 
-What is literal ai coding? It's the opposite of agentic AI enabled IDEs like Cursor, where your prompts modify your entire codebase and are then quickly forgotten, leading to write-only throw-away code.
-Literal ai is a way to store your prompts *inside* your project, and check them into git just like the rest of your code. It works more like a compiler - compiling your prompts into source code.
+What is literal ai coding? It's the **opposite of agentic AI** enabled IDEs like Cursor, where your prompts modify your entire codebase and are then quickly forgotten, leading to **write-only throw-away code**.
+Literal ai is a way to store your **prompts inside your project**, and check them into git just like the rest of your code. It works more like a compiler - **compiling your prompts into source code**.
 
 ## How it works
 Any function that only has a docstring and/or initial comments, will be generated when `literalai` is run on your project, and any function that was generated this way, will be updated if you change the signature, docstring and/or comments.
