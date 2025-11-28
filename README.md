@@ -1,3 +1,5 @@
+<img arc="logo.jpeg" float="right">
+
 # LiteralAI for Python
 
 What is literal ai coding? It's the opposite of agentic AI enabled IDEs like Cursor, where your prompts modify your entire codebase and are then quickly forgotten, leading to write-only throw-away code.
