@@ -1,5 +1,6 @@
-<img src="logo.jpeg" alt="Description" width="300" style="float: right; margin-left: 10px;">
 # LiteralAI compiler for Python
+
+<img src="logo.jpeg" alt="Description" width="300" style="float: right; margin-left: 10px;">
 
 What is literal ai coding? It's the **opposite of agentic AI** enabled IDEs like Cursor, where your prompts modify your entire codebase and are then quickly forgotten, leading to **write-only throw-away code**.
 Literal ai is a way to store your **prompts inside your project**, and check them into git just like the rest of your code. It works more like a compiler - **compiling your prompts into source code**.
