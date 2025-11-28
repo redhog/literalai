@@ -67,6 +67,13 @@ signature, docstring, and initial comments.
         codeid = sha_hash(signature)
         if codeid == old_codeid:
             return None        
+
+        print("===={generate function}====")
+        print("----{signature}----")
+        print(signature)
+        print("----{hash}----")
+        print("Old:", old_codeid)
+        print("New:", codeid)
         
         llm_result = self.generate_FunctionDef(signature)
         
@@ -80,15 +87,9 @@ signature, docstring, and initial comments.
         new_body = '\n'.join(new_body)
         replacement = f"{signature}\n{indent}# CODEID:{codeid}\n{new_body}"
 
-        print("===={generate}====")
         print("----{imports}----")
         print("\n".join([cst.Module([imp]).code_for_node(imp) for imp in llm_code["imports"]]))
-        print("----{signature}----")
-        print(signature)
-        print("----{hash}----")
-        print("Old:", old_codeid)
-        print("New:", codeid)
-        print("----{output}----")
+        print("----{function}----")
         print(replacement)
         
         return cst.parse_statement(
