@@ -8,3 +8,10 @@ def generate_slug(s):
     string s."""
     # Use regular expressions for this.
     
+class Point(object):
+    """A point in 2d space. Should be possible to print, measure
+    distance between, rotate around another point, change to have
+    another point as origo etc."""
+
+    def __str__(self):
+        return "%s,%s" % (self.x, self.y)
