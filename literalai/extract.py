@@ -2,7 +2,6 @@ import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 from typing import List, Optional, Tuple
 
-
 class ExtractImportsFn(cst.CSTVisitor):
     def __init__(self):
         self.imports: List[cst.CSTNode] = []
@@ -107,7 +106,84 @@ def extract_fn_signature(func_def: cst.FunctionDef) -> Tuple[List[str], str]:
     else:
         indentation = " " * 4
     
-    return parts, body, indentation
+    return {"signature": parts, "body": body, "indentation": indentation, "node": func_def}
+
+
+def extract_cls_signature(class_def: cst.ClassDef) -> Tuple[List[str], List[str], str]:
+    """
+    Extract the header of a class (class line + docstring + initial comments)
+    and the rest of the class body.
+    Returns: (header_lines, body_lines, indentation)
+    """
+    source = cst.Module([class_def]).code_for_node(class_def)
+    source_lines = source.splitlines()
+
+    # Wrap the module for metadata
+    module = cst.parse_module(source)
+    wrapper = MetadataWrapper(module)
+    pos_map = wrapper.resolve(PositionProvider)
+    class_node = wrapper.module.body[0]
+
+    header_nodes = []
+    body_nodes = []
+
+    # Iterate over class body statements
+    for stmt in class_node.body.body:
+        # Pass always goes in body
+        if isinstance(stmt, cst.Pass):
+            body_nodes.append(stmt)
+            continue
+        # Docstring: stays in header
+        if (
+            isinstance(stmt, cst.SimpleStatementLine)
+            and len(stmt.body) == 1
+            and isinstance(stmt.body[0], cst.Expr)
+            and isinstance(stmt.body[0].value, cst.SimpleString)
+        ):
+            header_nodes.append(stmt)
+            continue
+        # Any comment-only line immediately after docstring: header
+        if isinstance(stmt, cst.SimpleStatementLine):
+            leading_comments = [
+                l for l in stmt.leading_lines if isinstance(l, cst.Comment)
+            ]
+            if len(stmt.body) == 0 and leading_comments:
+                header_nodes.append(stmt)
+                continue
+        # Everything else is body
+        body_nodes.append(stmt)
+
+    # Build header and body lines
+    header_lines = []
+    body_lines = []
+
+    # Start with the class definition line
+    class_start = pos_map[class_node].start.line
+    class_end = pos_map[class_node].end.line
+    class_header_line = source_lines[class_start - 1]
+    header_lines.append(class_header_line)
+
+    # Add header nodes
+    for node in header_nodes:
+        start = pos_map[node].start.line
+        end = pos_map[node].end.line
+        header_lines.extend(source_lines[start - 1 : end])
+
+    # Add body nodes
+    for node in body_nodes:
+        start = pos_map[node].start.line
+        end = pos_map[node].end.line
+        body_lines.extend(source_lines[start - 1 : end])
+
+    # Determine indentation from first body line
+    if body_lines:
+        first_line = body_lines[0]
+        stripped = first_line.lstrip()
+        indentation = first_line[: len(first_line) - len(stripped)]
+    else:
+        indentation = " " * 4
+
+    return {"signature": header_lines, "body": body_lines, "indentation": indentation, "node": class_def}
 
 # Example
 if __name__ == "__main__":
@@ -121,11 +197,34 @@ def test(x: int) -> str:
 """
     module = cst.parse_module(code)
     func_node = module.body[0]
-    header, body, indent = extract_fn_signature(func_node)
-    print("Indent:", repr(indent))
+    sig = extract_fn_signature(func_node)
+    print("Indent:", repr(sig["indentation"]))
     print("===={Header}=====")
-    for part in header:
+    for part in sig["signature"]:
         print(repr(part))
     print("===={Body}=====")
-    for part in body:
+    for part in sig["body"]:
         print(repr(part))
+
+
+    code = """
+class Test(object):
+    # Docstrings are important
+    '''My docstring'''
+    # Some other comment
+
+    fie = 1
+    def foo(x):
+        return str(x + 1)
+"""
+    module = cst.parse_module(code)
+    cls_node = module.body[0]
+    sig = extract_cls_signature(cls_node)
+    print("Indent:", repr(sig["indentation"]))
+    print("===={Header}=====")
+    for part in sig["signature"]:
+        print(repr(part))
+    print("===={Body}=====")
+    for part in sig["body"]:
+        print(repr(part))
+        
