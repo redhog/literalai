@@ -29,7 +29,7 @@ The file will then be updated to contain
 ```python
 def add_two(a, b):
     """Add two numbers together, return the result"""
-    # CODEID:4a5c8e754c305b36907466707fbbcdc9883ba6499cddd35fb4e1923f7af4e2e4
+    # LITERALAI: {"codeid": "4a5c8e754c305b36907466707fbbcdc9883ba6499cddd35fb4e1923f7af4e2e4"}
     result = a + b
     return result
 
