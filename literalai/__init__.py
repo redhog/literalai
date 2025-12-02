@@ -4,12 +4,19 @@ import re
 import json
 from typing import Optional, Tuple, List, Dict
 import argparse
-import litellm
-from litellm import text_completion
 import libcst as cst
 from libcst import CSTTransformer, parse_module, parse_expression
 from .blocks import compound
 from .blocks import module
+
+# Just so we don't have to even import litellm (slow) if we have no changes
+_text_completion = None
+def text_completion(*arg, **kw):
+    global _text_completion
+    if _text_completion is None:
+        from litellm import text_completion as _text_completion
+    return _text_completion(*arg, **kw)
+
 
 CODEID_PATTERN = re.compile(r"#\s*CODEID=([0-9a-f]+)")
 
@@ -52,14 +59,23 @@ signature, docstring, and initial comments.
         if "```python" in llm_result:
             llm_result = llm_result.split("```python", 1)[1]
             llm_result = llm_result.rsplit("```", 1)[0]
-
-        return cst.parse_module(llm_result)
+        elif "```" in llm_result:
+            llm_result = llm_result.split("```", 1)[1]
+            llm_result = llm_result.rsplit("```", 1)[0]
+        try:
+            return cst.parse_module(llm_result)
+        except Exception as e:
+            raise Exception("Unable to parse: %s\n%s" % (e, llm_result)) from e
 
     def signature_codeid(self, sig):
         data = {"generate": False, "autogen": False, "metadata": {}, **sig}
 
         old_codeid = data["metadata"].get("codeid", None)
-        new_codeid = sha_hash(stringify(data["signature"]))
+        signature_str = stringify(data["signature"]).strip()
+        if "LITERALAI" in signature_str:
+            import pdb
+            pdb.set_trace()
+        new_codeid = sha_hash(signature_str)
         
         if (    (new_codeid != old_codeid)
             and (   old_codeid is not None
@@ -76,6 +92,9 @@ signature, docstring, and initial comments.
         return data
     
     def replace_FunctionDef(self, node):
+        leading_lines = node.leading_lines
+        node = node.with_changes(leading_lines = [])
+
         sig = self.signature_codeid(compound.extract_metadata(node))
         if not sig["generate"]:
             return None        
@@ -104,7 +123,7 @@ signature, docstring, and initial comments.
         print("----{function}----")
         print(stringify(replacement))
         
-        return replacement
+        return replacement.with_changes(leading_lines = leading_lines)
     
     def leave_ClassDef(self, original_node: cst.ClassDef, updated_node: cst.ClassDef) -> cst.CSTNode:
         replacement = self.replace_ClassDef(original_node)
@@ -137,16 +156,11 @@ docstrings.
         return cst.parse_module(llm_result)
             
     def replace_ClassDef(self, node):
+        leading_lines = node.leading_lines
+        node = node.with_changes(leading_lines = [])
+
         sig = self.signature_codeid(compound.extract_metadata(node))
         if not sig["generate"]:
-            print("===={NOT generate class}====")
-            print("----{signature}----")
-            print(stringify(sig["signature"]))
-            print("----{metadata}----")
-            print(sig["metadata"])
-            print("----{hash}----")
-            print("Old:", sig["old_codeid"])
-            print("New:", sig["codeid"])
             return None
 
         if sig["body"] is None:
@@ -185,11 +199,15 @@ docstrings.
         for stmt in llm_result_sig["body"].body:
             if isinstance(stmt, cst.FunctionDef):
                 method_sig = self.signature_codeid(compound.extract_signature(stmt))
-                method_sig["metadata"]["genid"] = method_sig["metadata"]["codeid"]
+                # Generate the body in a recursive call to the LLM!
+                method_sig["metadata"]["genid"] = method_sig["metadata"].pop("codeid")
+                method_sig["body"] = None
                 stmt = compound.unextract_metadata(method_sig)
             with_metadata.append(stmt)
         llm_result_sig["body"] = llm_result_sig["body"].with_changes(
             body = with_metadata)
+
+        llm_result_sig["body"] = llm_result_sig["body"].visit(self)
         
         replacement = compound.unextract_metadata(
             {**sig, "body": compound.append_blocks(sig["body"], llm_result_sig["body"])})
@@ -197,7 +215,7 @@ docstrings.
         print("----{class}----")
         print(stringify(replacement))
         
-        return replacement
+        return replacement.with_changes(leading_lines = leading_lines)
     
     def leave_Module(self, original_node: cst.Module, updated_node: cst.Module):
         return updated_node.with_changes(

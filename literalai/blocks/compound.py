@@ -94,16 +94,16 @@ def extract_signature(node: cst.BaseCompoundStatement) -> dict:
 def append_2blocks(a: cst.IndentedBlock|None, b: cst.IndentedBlock|None) -> cst.IndentedBlock:
     if a is None: return b
     if b is None: return a
-    stmts = b.body
-    footer = b.footer
+    stmts = list(b.body)
+    footer = list(b.footer)
     if a.footer:
         if stmts:
             stmts[0] = stmts[0].with_changes(
-                leading_lines = a.footer + list(stmts[0].leading_lines))
+                leading_lines = list(a.footer) + list(stmts[0].leading_lines))
         else:
-            footer = a.footer + footer
+            footer = list(a.footer) + footer
     return a.with_changes(
-            body = a.body + stmts,
+            body = list(a.body) + stmts,
             footer = footer)
     
 def append_blocks(*blocks: list[cst.IndentedBlock]) -> cst.IndentedBlock:
