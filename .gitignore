@@ -1,3 +1,7 @@
 *.pyc
 .#*
 *.egg-info/
+*~
+env.sh
+.env
+dist/
