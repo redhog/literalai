@@ -72,9 +72,9 @@ signature, docstring, and initial comments.
 
         old_codeid = data["metadata"].get("codeid", None)
         signature_str = stringify(data["signature"]).strip()
-        if "LITERALAI" in signature_str:
-            import pdb
-            pdb.set_trace()
+
+        assert "# LITERALAI: " not in signature_str, "Parsing problem..."
+        
         new_codeid = sha_hash(signature_str)
         
         if (    (new_codeid != old_codeid)
