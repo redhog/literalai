@@ -9,7 +9,7 @@ from typing import Tuple, Dict
 import libcst as cst
 from typing import Optional
 
-def extract_metadata(func_node: cst.FunctionDef) -> Tuple[Dict, bool]:
+def extract_metadata(node: cst.BaseCompoundStatement) -> dict:
     """
     Extract JSON from a `# LITERALAI:` comment in a function body.
 
@@ -17,107 +17,107 @@ def extract_metadata(func_node: cst.FunctionDef) -> Tuple[Dict, bool]:
         - The parsed JSON as a dict, or {} if not found.
         - Boolean indicating whether the function has real statements.
     """
+
     literalai_data = {}
-    has_real_statements = False
-
-    # Check if there are real statements
-    if func_node.body.body:
-        # Filter out just docstrings and pass (EmptyLine) statements
-        has_real_statements = any(
-            not isinstance(stmt, (cst.SimpleStatementLine, cst.Pass)) or
-            not (len(stmt.body) == 1 and isinstance(stmt.body[0], cst.Expr) and isinstance(stmt.body[0].value, cst.SimpleString))
-            for stmt in func_node.body.body
-        )
-
-    # Collect all comments: both inline and footer (trailing) comments
-    comments = []
-
-    for stmt in func_node.body.body:
-        # Inline comments
-        if isinstance(stmt, cst.SimpleStatementLine):
-            for comment in stmt.leading_lines:
-                if comment.comment:
-                    comments.append(comment.comment.value)
-            for small_stmt in stmt.body:
-                if hasattr(small_stmt, "trailing_whitespace"):
-                    trailing_comment = getattr(small_stmt.trailing_whitespace, "comment", None)
-                    if trailing_comment:
-                        comments.append(trailing_comment.value)
-
-        # EmptyLine with comment (used for footer)
-        if hasattr(stmt, "leading_lines"):
-            for line in stmt.leading_lines:
-                if line.comment:
-                    comments.append(line.comment.value)
-
-    # Footer comments are also stored in the block footer
-    if hasattr(func_node.body, "footer"):
-        for line in func_node.body.footer:
-            if isinstance(line, cst.EmptyLine) and line.comment:
-                comments.append(line.comment.value)
-
-    # Search for LITERALAI comment
-    for comment in comments:
-        if comment.strip().startswith("# LITERALAI:"):
-            json_text = comment.strip()[len("# LITERALAI:"):].strip()
-            try:
-                literalai_data = json.loads(json_text)
-            except json.JSONDecodeError:
-                literalai_data = {}
+    signature = extract_signature(node)
+    footer = []
+    for stmt in signature["signature"].body.footer:
+        if stmt.comment and "LITERALAI: " in stmt.comment.value:
+            json_text = stmt.comment.value.split("# LITERALAI:")[1].strip()
+            literalai_data.update(json.loads(json_text))
             break
+        footer.append(stmt)
+        
+    return {
+        **signature,
+        "metadata": literalai_data,
+            "signature": signature["signature"].with_changes(
+                body=signature["signature"].body.with_changes(
+                    footer = footer)),
+            "empty":  signature["body"] is None,
+            }
 
-    return {"metadata": literalai_data,
-            "empty": not has_real_statements}
+def signature_append_metadata(node: cst.BaseCompoundStatement, metadata: dict):
+    return node.with_changes(
+        body = node.body.with_changes(
+            footer = list(node.body.footer) + [
+                cst.EmptyLine(
+                    indent=True,
+                    whitespace=cst.SimpleWhitespace(value=''),
+                    comment=cst.Comment(value="# LITERALAI: " + json.dumps(metadata)),
+                    newline=cst.Newline(value=None))]))
 
-
-def extract_signature(func_node: cst.FunctionDef) -> cst.FunctionDef:
+def extract_signature(node: cst.BaseCompoundStatement) -> dict:
     comments = []
-    stmts = []
+    header = []
+    body = []
+    body_comments = []
     found_metadata = False
 
     stmt  = None
-    for stmt in func_node.body.body:
+    stmts = iter(node.body.body)
+    for stmt in stmts:
         if (    not isinstance(stmt, cst.Pass)
             and not (    hasattr(stmt, "body")
                      and len(stmt.body) == 1
                      and isinstance(stmt.body[0], cst.Expr)
                      and isinstance(stmt.body[0].value, cst.SimpleString))):
-            for comment in stmt.leading_lines:
-                if comment.comment:
-                    if "# LITERALAI:" in comment.comment.value:
-                        found_metadata = True
-                        break
-                    comments.append(
-                        cst.EmptyLine(
-                            indent=True,
-                            whitespace=cst.SimpleWhitespace(value=''),
-                            comment=comment.comment,
-                            newline=cst.Newline(value=None)))
+            if stmt.leading_lines:
+                for comment in stmt.leading_lines:
+                    if comment.comment:
+                        comments.append(
+                            cst.EmptyLine(
+                                indent=True,
+                                whitespace=cst.SimpleWhitespace(value=''),
+                                comment=comment.comment,
+                                newline=cst.Newline(value=None)))
+                stmt = stmt.with_changes(leading_lines=[])
+            body.append(stmt)
+            for stmt in stmts:
+                body.append(stmt)
             break
-        stmts.append(stmt)
+        header.append(stmt)
 
-    if not found_metadata:
-        for stmt in func_node.body.footer:
-            if stmt.comment is not None:
-                if "# LITERALAI:" in stmt.comment.value:
-                    found_metadata = True
-                    break
-                comments.append(stmt)
+    if body:
+        for stmt in node.body.footer:
+            body_comments.append(stmt)
+    else:
+        for stmt in node.body.footer:
+            comments.append(stmt)
 
-    return func_node.with_changes(
-        body=func_node.body.with_changes(
-            body = stmts,
-            footer = comments
-        ))
+    return {
+        "signature": node.with_changes(
+            body=node.body.with_changes(
+                body = header,
+                footer = comments
+            )),
+        "body": cst.IndentedBlock(body=body, footer=body_comments) if body or body_comments else None}
+
+def append_body(signature: cst.BaseCompoundStatement, body: cst.IndentedBlock) -> cst.BaseCompoundStatement:
+    stmts = body.body
+    footer = body.footer
+    if signature.body.footer:
+        if stmts:
+            stmts[0] = stmts[0].with_changes(
+                leading_lines = signature.body.footer + list(stmts[0].leading_lines))
+        else:
+            footer = signature.body.footer + footer
+            
+    return signature.with_changes(
+        body = signature.body.with_changes(
+            body = signature.body.body + stmts,
+            footer = footer))
+
 
 if __name__ == "__main__":
     source1 = """
 def foo(x):
     "My docstring"
     # Some comment
-    # LITERALAI: {"json": "goes", "here": "indeed"}
+    # Other comment
+    # LITERALAI: {"foo": "bar"}
 """
-    source2 = source1 + "\n    x = x + 1"
+    source2 = source1 + "\n    x = x + 1\n    # End comment"
 
     for idx, source in enumerate([source1, source2]):
         module = cst.parse_module(source)
@@ -125,10 +125,38 @@ def foo(x):
 
         data = extract_metadata(func_node)
         print("===={%s}====" % idx)
-        print(data)
-
-        #print(func_node)
-
-        sig_node = extract_signature(func_node)
+        print(data["metadata"])
         print("Signature:")
-        print(cst.Module([sig_node]).code_for_node(sig_node))
+        print(cst.Module([data["signature"]]).code_for_node(data["signature"]))
+        print("Body:")
+        if data["body"] is None:
+            print("None")
+        else:
+            print(cst.Module([data["body"]]).code_for_node(data["body"]))
+
+    dst = """
+def foo(x):
+    "My docstring"
+    # Some comment
+"""
+    src = """
+def bar(x):
+    return x + 1
+    # Yeah, really do just inc(x)
+"""
+    
+    src = cst.parse_module(src).body[0]
+    dst = cst.parse_module(dst).body[0]
+
+    signature = extract_signature(dst)["signature"]
+    body = extract_signature(src)["body"]
+
+    res = append_body(signature, body)
+
+    print("dst with body from src:")
+    print(cst.Module([res]).code_for_node(res))
+
+
+    newsig = signature_append_metadata(src, {"Metadata": "added"})
+    print("src with added metadata:")
+    print(cst.Module([newsig]).code_for_node(newsig))
