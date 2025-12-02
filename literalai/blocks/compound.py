@@ -1,13 +1,11 @@
 import libcst as cst
 import json
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 
-import libcst as cst
-import json
-from typing import Tuple, Dict
-
-import libcst as cst
-from typing import Optional
+def unextract_metadata(data: dict) -> cst.BaseCompoundStatement:
+    return append_body(
+        signature_append_metadata(data["signature"], data["metadata"]),
+        data["body"])
 
 def extract_metadata(node: cst.BaseCompoundStatement) -> dict:
     """
@@ -58,7 +56,7 @@ def extract_signature(node: cst.BaseCompoundStatement) -> dict:
     stmts = iter(node.body.body)
     for stmt in stmts:
         if (    not isinstance(stmt, cst.Pass)
-            and not (    hasattr(stmt, "body")
+            and not (    isinstance(stmt, cst.SimpleStatementLine)
                      and len(stmt.body) == 1
                      and isinstance(stmt.body[0], cst.Expr)
                      and isinstance(stmt.body[0].value, cst.SimpleString))):
@@ -93,20 +91,29 @@ def extract_signature(node: cst.BaseCompoundStatement) -> dict:
             )),
         "body": cst.IndentedBlock(body=body, footer=body_comments) if body or body_comments else None}
 
-def append_body(signature: cst.BaseCompoundStatement, body: cst.IndentedBlock) -> cst.BaseCompoundStatement:
-    stmts = body.body
-    footer = body.footer
-    if signature.body.footer:
+def append_2blocks(a: cst.IndentedBlock|None, b: cst.IndentedBlock|None) -> cst.IndentedBlock:
+    if a is None: return b
+    if b is None: return a
+    stmts = b.body
+    footer = b.footer
+    if a.footer:
         if stmts:
             stmts[0] = stmts[0].with_changes(
-                leading_lines = signature.body.footer + list(stmts[0].leading_lines))
+                leading_lines = a.footer + list(stmts[0].leading_lines))
         else:
-            footer = signature.body.footer + footer
-            
+            footer = a.footer + footer
+    return a.with_changes(
+            body = a.body + stmts,
+            footer = footer)
+    
+def append_blocks(*blocks: list[cst.IndentedBlock]) -> cst.IndentedBlock:
+    if len(blocks) == 1:
+        return blocks[0]
+    return append_2blocks(blocks[0], append_blocks(*blocks[1:]))
+
+def append_body(signature: cst.BaseCompoundStatement, body: cst.IndentedBlock) -> cst.BaseCompoundStatement:
     return signature.with_changes(
-        body = signature.body.with_changes(
-            body = signature.body.body + stmts,
-            footer = footer))
+        body = append_blocks(signature.body, body))
 
 
 if __name__ == "__main__":
