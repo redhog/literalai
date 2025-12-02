@@ -1,4 +1,4 @@
-<img arc="logo.jpeg" float="right">
+<img src="logo.jpeg" align="right" width="200">
 
 # LiteralAI compiler for Python
 
