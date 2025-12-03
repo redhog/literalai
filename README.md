@@ -87,8 +87,42 @@ Each block can set the following keys:
   access to the variable `signature` (the function or class signature)
   and all of the config.
 
-Note: Changes to the config will lead to code regeneration for
+Note: **Changes to the config** will lead to **code regeneration** for
 affected code (e.g. `base` and `FunctionDef` regenerates functions).
+
+
+Example `literalai.yml`:
+
+```yaml
+base:
+  model: "openai/gpt-4"
+
+FunctionDef:
+  prompt: |
+    Generate the python source code for a function with the following
+    signature, docstring, and initial comments.
+
+    {{signature}}
+
+    # IMPORTANT
+     * Write the full function implementation.
+     * Provide only valid python for a single function as output.
+     * Do NOT add any initial description, argument or similar
+
+ClassDef:
+  prompt: |
+    Below is the python source code for a class and some of its methods
+    (without implementations). Given the docstring and initial comments of
+    the class, define any missing method signatures and provide their
+    docstrings.
+
+    {{signature}}
+
+    # IMPORTANT
+     * Write the full class specification.
+     * Provide only valid skeleton python for a single class as output.
+     * Do NOT add any initial description or similar
+```
 
 ## Installation
 
