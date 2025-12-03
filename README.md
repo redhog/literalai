@@ -29,7 +29,7 @@ The file will then be updated to contain
 ```python
 def add_two(a, b):
     """Add two numbers together, return the result"""
-    # CODEID:4a5c8e754c305b36907466707fbbcdc9883ba6499cddd35fb4e1923f7af4e2e4
+    # LITERALAI: {"codeid": "4a5c8e754c305b36907466707fbbcdc9883ba6499cddd35fb4e1923f7af4e2e4"}
     result = a + b
     return result
 
@@ -38,3 +38,11 @@ def manual(x):
     return x + 1
 ```
 Notice how the manual function stays untouched. If you where to change the docstring of `add_two` and rerun `literalai .`, its body would be regenerated using the new docstring.
+
+## What about classes?
+
+Any class that only has a docstring and/or initial comments, will be generated when `literalai` is run on your project, and any class that was generated this way, will be updated if you change the signature, docstring and/or comments. What it means to update a class is that method signatures and docstrings will be generated matching the docstring of the class. These will then be generated as functions as per above. Any methods previously generated this way and whos' docstrings or comments haven't been manually changed, will be replaced by the new ones. Methods that have manually written or changed signatures, docstrings or initial comments won't be touched / overwritten.
+
+# Installation
+
+`pip install literalai-python`
