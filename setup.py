@@ -1,8 +1,11 @@
 from setuptools import setup, find_packages
 
+with open("README.md") as f:
+    long_description = f.read()
+
 setup(
-    name="literalai",
-    version="0.0.1",
+    name="literalai_python",
+    version="0.0.2",
     description="A LiteralAI compiler for Python",
     author="Egil Moeller",
     author_email="redhog@redhog.org",
@@ -10,7 +13,9 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "litellm>=1.0.0",
-        "libcst"
+        "libcst",
+        "pyyaml"
+        "jinja2"
     ],
     include_package_data=True,
     entry_points={
@@ -18,4 +23,8 @@ setup(
             "literalai=literalai:main",
         ]
     },
+
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/redhog/literalai"
 )

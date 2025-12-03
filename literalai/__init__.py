@@ -2,9 +2,11 @@ import hashlib
 import os
 import re
 import json
+import yaml
 from typing import Optional, Tuple, List, Dict
 import argparse
 import libcst as cst
+import jinja2
 from libcst import CSTTransformer, parse_module, parse_expression
 from .blocks import compound
 from .blocks import module
@@ -17,23 +19,71 @@ def text_completion(*arg, **kw):
         from litellm import text_completion as _text_completion
     return _text_completion(*arg, **kw)
 
+builtin_config = {
+    "base": {
+        "model": "openai/gpt-4",
+    },
 
-CODEID_PATTERN = re.compile(r"#\s*CODEID=([0-9a-f]+)")
+    "FunctionDef": {
+        "prompt": """
+Generate the python source code for a function with the following
+signature, docstring, and initial comments.
+
+{{signature}}
+
+# IMPORTANT
+ * Write the full function implementation.
+ * Provide only valid python for a single function as output.
+ * Do NOT add any initial description, argument or similar
+"""
+    },
+    
+    "ClassDef": {
+        "prompt": """
+Below is the python source code for a class and some of its methods
+(without implementations). Given the docstring and initial comments of
+the class, define any missing method signatures and provide their
+docstrings.
+
+{{signature}}
+
+# IMPORTANT
+ * Write the full class specification.
+ * Provide only valid skeleton python for a single class as output.
+ * Do NOT add any initial description or similar
+"""
+    }
+}
 
 def sha_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+def sha_hash_data(data):
+    return sha_hash(
+        json.dumps(
+            data,
+            sort_keys=True,
+            separators=(',', ':'),
+            ensure_ascii=False
+        ))
+    
 def stringify(node):
     return cst.Module([node]).code_for_node(node)
 
 class TransformCode(CSTTransformer):
     @classmethod
-    def transform_code(cls, src):
-        return parse_module(src).visit(cls()).code
+    def transform_code(cls, src, **kw):
+        return parse_module(src).visit(cls(**kw)).code
 
-    def __init__(self):
+    def __init__(self, config = {}):
+        self.config = config                 
         self.imports: Set[cst.SimpleStatementLine] = set()
 
+    def get_config(self, config_path):
+        return merge_configs(
+            *[self.config.get(key)
+              for key in ["base"] + config_path])
+        
     def leave_FunctionDef(self, original_node, updated_node):
         replacement = self.replace_FunctionDef(original_node)
         if replacement is None:
@@ -41,19 +91,11 @@ class TransformCode(CSTTransformer):
         return replacement
         
     def generate_FunctionDef(self, signature):
-        prompt = f"""
-Generate the python source code for a function with the following
-signature, docstring, and initial comments.
+        conf = self.get_config(["FunctionDef"])
 
-{stringify(signature)}
+        prompt = jinja2.Template(conf["prompt"]).render(signature = stringify(signature), **conf)
 
-# IMPORTANT
- * Write the full function implementation.
- * Provide only valid python for a single function as output.
- * Do NOT add any initial description, argument or similar
-"""
-
-        response = text_completion(model="openai/gpt-4", prompt=prompt)
+        response = text_completion(model=conf["model"], prompt=prompt)
         llm_result = response.choices[0].text.strip()
         
         if "```python" in llm_result:
@@ -67,7 +109,9 @@ signature, docstring, and initial comments.
         except Exception as e:
             raise Exception("Unable to parse: %s\n%s" % (e, llm_result)) from e
 
-    def signature_codeid(self, sig):
+    def signature_codeid(self, sig, config_path = []):
+        config_hash = sha_hash_data(self.get_config(config_path))
+        
         data = {"generate": False, "autogen": False, "metadata": {}, **sig}
 
         old_codeid = data["metadata"].get("codeid", None)
@@ -75,7 +119,7 @@ signature, docstring, and initial comments.
 
         assert "# LITERALAI: " not in signature_str, "Parsing problem..."
         
-        new_codeid = sha_hash(signature_str)
+        new_codeid = sha_hash(config_hash + signature_str)
         
         if (    (new_codeid != old_codeid)
             and (   old_codeid is not None
@@ -95,7 +139,7 @@ signature, docstring, and initial comments.
         leading_lines = node.leading_lines
         node = node.with_changes(leading_lines = [])
 
-        sig = self.signature_codeid(compound.extract_metadata(node))
+        sig = self.signature_codeid(compound.extract_metadata(node), ["FunctionDef"])
         if not sig["generate"]:
             return None        
 
@@ -132,21 +176,10 @@ signature, docstring, and initial comments.
         return replacement
     
     def generate_ClassDef(self, signature):
-        prompt = f"""
-Below is the python source code for a class and some of its methods
-(without implementations). Given the docstring and initial comments of
-the class, define any missing method signatures and provide their
-docstrings.
+        conf = self.get_config(["ClassDef"])
+        prompt = jinja2.Template(conf["prompt"]).render(signature = stringify(signature["signature"]), **conf)
 
-{stringify(signature["signature"])}
-
-# IMPORTANT
- * Write the full class specification.
- * Provide only valid skeleton python for a single class as output.
- * Do NOT add any initial description or similar
-"""
-
-        response = text_completion(model="openai/gpt-4", prompt=prompt)
+        response = text_completion(model=conf["model"], prompt=prompt)
         llm_result = response.choices[0].text.strip()
 
         if "```python" in llm_result:
@@ -159,7 +192,7 @@ docstrings.
         leading_lines = node.leading_lines
         node = node.with_changes(leading_lines = [])
 
-        sig = self.signature_codeid(compound.extract_metadata(node))
+        sig = self.signature_codeid(compound.extract_metadata(node), ["ClassDef"])
         if not sig["generate"]:
             return None
 
@@ -169,7 +202,7 @@ docstrings.
             manual = []
             for stmt in sig["body"].body:
                 if isinstance(stmt, cst.FunctionDef):
-                    method_sig = self.signature_codeid(compound.extract_metadata(stmt))
+                    method_sig = self.signature_codeid(compound.extract_metadata(stmt), ["FunctionDef"])
                     if method_sig["autogen"]:
                         continue
                 manual.append(stmt)
@@ -198,7 +231,7 @@ docstrings.
         with_metadata = []
         for stmt in llm_result_sig["body"].body:
             if isinstance(stmt, cst.FunctionDef):
-                method_sig = self.signature_codeid(compound.extract_signature(stmt))
+                method_sig = self.signature_codeid(compound.extract_signature(stmt), ["FunctionDef"])
                 # Generate the body in a recursive call to the LLM!
                 method_sig["metadata"]["genid"] = method_sig["metadata"].pop("codeid")
                 method_sig["body"] = None
@@ -222,22 +255,49 @@ docstrings.
             body=list(self.imports) + list(updated_node.body)
         )    
     
-def process_file(filepath: str):
+def process_file(filepath: str, config = {}):
     with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
-    new_source = TransformCode.transform_code(source)
+    new_source = TransformCode.transform_code(source, config=config)
     # print("===={new source}====")
     # print(new_source)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(new_source)
 
+def merge_config(a, b):
+    if isinstance(a, dict) and isinstance(b, dict):
+        return {k: merge_config(a[k], b[k]) if (k in a and k in b) else a.get(k, b.get(k))
+                for k in set(a.keys()).union(b.keys())}
+    else:
+        return b
+        
+def merge_configs(*configs):
+    if len(configs) == 1:
+        return configs[0]
+    return merge_config(configs[0], merge_configs(*configs[1:]))
+        
 def process_directory(root_dir: str):
+    root_dir = os.path.abspath(root_dir)
+    stack = []  # stack of (dirpath, literalai.yml path or None)
+    prev_depth = 0
+
     for dirpath, _, filenames in os.walk(root_dir):
+        rel = os.path.relpath(dirpath, root_dir)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        while len(stack) > depth:
+            stack.pop()
+        cfg = {}
+        if "literalai.yml" in filenames:
+            with open(os.path.join(dirpath, "literalai.yml")) as f:
+                cfg = yaml.safe_load(f)
+        stack.append((dirpath, cfg))
+        config_files = [c for _, c in stack if c]
+
         for fname in filenames:
             if fname.endswith(".py"):
                 filepath = os.path.join(dirpath, fname)
                 print(f"Processing {filepath}")
-                process_file(filepath)
+                process_file(filepath, merge_configs(*([builtin_config] + config_files)))
 
 def main():
     parser = argparse.ArgumentParser(description="Regenerate Python functions/classes with docstring verification.")
