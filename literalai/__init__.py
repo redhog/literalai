@@ -317,7 +317,12 @@ def process_directory(root_dir: str, **kw):
     stack = []  # stack of (dirpath, literalai.yml path or None)
     prev_depth = 0
 
-    for dirpath, _, filenames in os.walk(root_dir):
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Don't go into .git etc
+        for name in list(dirnames):
+            if name.startswith("."):
+                dirnames.remove('.git')
+            
         rel = os.path.relpath(dirpath, root_dir)
         depth = 0 if rel == "." else rel.count(os.sep) + 1
         while len(stack) > depth:
