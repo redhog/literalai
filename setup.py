@@ -5,7 +5,7 @@ with open("README.md") as f:
 
 setup(
     name="literalai_python",
-    version="0.0.4",
+    version="0.0.5",
     description="A LiteralAI compiler for Python",
     author="Egil Moeller",
     author_email="redhog@redhog.org",
@@ -14,7 +14,7 @@ setup(
     install_requires=[
         "litellm>=1.0.0",
         "libcst",
-        "pyyaml"
+        "pyyaml",
         "jinja2"
     ],
     include_package_data=True,
