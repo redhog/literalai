@@ -5,7 +5,7 @@ with open("README.md") as f:
 
 setup(
     name="literalai_python",
-    version="0.0.3",
+    version="0.0.4",
     description="A LiteralAI compiler for Python",
     author="Egil Moeller",
     author_email="redhog@redhog.org",
