@@ -293,7 +293,7 @@ def process_file(filepath: str, config = {}, **kw):
     with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
     new_source = TransformCode.transform_code(source, config=config, **kw)
-    if kw.get("dry_run"):
+    if kw.get("print_source") and not kw.get("super_dry_run"):
         print("===={new source}====")
         print(new_source)
     if kw.get("dry_run") or kw.get("super_dry_run"):
@@ -353,9 +353,14 @@ functions and classes where the docstrings have changed.""")
         help="Root directory of Python source code (default: current directory)"
     )
     parser.add_argument(
+        "--print-source",
+        action="store_true",
+        help="Print the full updated source to screen."
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not write the updated code to disk, just print it to screen."
+        help="Do not write the updated code to disk. Can be combined with --print-source."
     )
     parser.add_argument(
         "--super-dry-run",
