@@ -56,7 +56,7 @@ docstrings.
 }
 
 def sha_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 def sha_hash_data(data):
     return sha_hash(
@@ -85,17 +85,13 @@ class TransformCode(CSTTransformer):
               for key in ["base"] + config_path])
         
     def leave_FunctionDef(self, original_node, updated_node):
-        replacement = self.replace_FunctionDef(original_node)
+        replacement = self.replace_FunctionDef(updated_node)
         if replacement is None:
             return updated_node
         return replacement
         
-    def generate_FunctionDef(self, signature):
-        conf = self.get_config(["FunctionDef"])
-
-        prompt = jinja2.Template(conf["prompt"]).render(signature = stringify(signature), **conf)
-
-        response = text_completion(model=conf["model"], prompt=prompt)
+    def generate(self, sig, conf):
+        response = text_completion(model=conf["model"], prompt=sig["prompt"])
         llm_result = response.choices[0].text.strip()
         
         if "```python" in llm_result:
@@ -109,37 +105,52 @@ class TransformCode(CSTTransformer):
         except Exception as e:
             raise Exception("Unable to parse: %s\n%s" % (e, llm_result)) from e
 
-    def signature_codeid(self, sig, config_path = []):
-        config_hash = sha_hash_data(self.get_config(config_path))
+    def get_prompt(self, sig, conf):
+        return {
+            "prompt": jinja2.Template(conf["prompt"]).render(
+                signature = stringify(sig["signature"]),
+                **conf),
+            **sig}
+        
+    def update_metadata(self, sig, conf, autogen=False):
+        config_hash = sha_hash_data(conf)
         
         data = {"generate": False, "autogen": False, "metadata": {}, **sig}
 
-        old_codeid = data["metadata"].get("codeid", None)
-        signature_str = stringify(data["signature"]).strip()
+        old_prompt = data["metadata"].get("prompt", None)
+        old_gen = data["metadata"].get("gen", None)
 
-        assert "# LITERALAI: " not in signature_str, "Parsing problem..."
+        assert "# LITERALAI: " not in sig["prompt"], "Parsing problem: %s" % signature_str
         
-        new_codeid = sha_hash(config_hash + signature_str)
-        
-        if (    (new_codeid != old_codeid)
-            and (   old_codeid is not None
+        new_prompt = sha_hash(config_hash + sig["prompt"])
+        new_gen = sha_hash(stringify(sig["signature"]))
+
+        if (    (new_prompt != old_prompt)
+            and (   old_prompt is not None
                  or data["body"] is None)):
             data["generate"] = True            
 
-        if new_codeid == data["metadata"].get("genid", None):
+        if new_gen == data["metadata"].get("gen", None):
             data["autogen"] = True
 
-        data["old_codeid"] = old_codeid
-        data["codeid"] = new_codeid
-        data["metadata"]["codeid"] = new_codeid
-        
+        data["old_promptid"] = old_prompt
+        data["old_gen"] = old_gen
+        data["promptid"] = new_prompt
+        data["metadata"]["prompt"] = new_prompt
+        if autogen:
+            data["metadata"]["gen"] = new_gen
+
         return data
+
     
     def replace_FunctionDef(self, node):
         leading_lines = node.leading_lines
         node = node.with_changes(leading_lines = [])
 
-        sig = self.signature_codeid(compound.extract_metadata(node), ["FunctionDef"])
+        conf = self.get_config(["FunctionDef"])
+        sig = self.get_prompt(compound.extract_metadata(node), conf)
+        
+        sig = self.update_metadata(sig, conf)
         if not sig["generate"]:
             return None        
 
@@ -147,10 +158,10 @@ class TransformCode(CSTTransformer):
         print("----{signature}----")
         print(stringify(sig["signature"]))
         print("----{hash}----")
-        print("Old:", sig["old_codeid"])
-        print("New:", sig["codeid"])
+        print("Old:", sig["old_promptid"])
+        print("New:", sig["promptid"])
         
-        llm_result = self.generate_FunctionDef(sig["signature"])
+        llm_result = self.generate(sig, conf)
         
         #print("===={llm}====")
         #print(llm_result)
@@ -170,7 +181,7 @@ class TransformCode(CSTTransformer):
         return replacement.with_changes(leading_lines = leading_lines)
     
     def leave_ClassDef(self, original_node: cst.ClassDef, updated_node: cst.ClassDef) -> cst.CSTNode:
-        replacement = self.replace_ClassDef(original_node)
+        replacement = self.replace_ClassDef(updated_node)
         if replacement is None:
             return updated_node
         return replacement
@@ -191,10 +202,10 @@ class TransformCode(CSTTransformer):
     def replace_ClassDef(self, node):
         leading_lines = node.leading_lines
         node = node.with_changes(leading_lines = [])
-
-        sig = self.signature_codeid(compound.extract_metadata(node), ["ClassDef"])
-        if not sig["generate"]:
-            return None
+        
+        conf = self.get_config(["ClassDef"])
+        fn_conf = self.get_config(["FunctionDef"])
+        sig = compound.extract_metadata(node)
 
         if sig["body"] is None:
             llm_sig = sig
@@ -202,24 +213,34 @@ class TransformCode(CSTTransformer):
             manual = []
             for stmt in sig["body"].body:
                 if isinstance(stmt, cst.FunctionDef):
-                    method_sig = self.signature_codeid(compound.extract_metadata(stmt), ["FunctionDef"])
+                    method_sig = self.update_metadata(
+                        self.get_prompt(
+                            compound.extract_metadata(stmt),
+                            fn_conf),
+                        fn_conf)
                     if method_sig["autogen"]:
                         continue
+                    stmt = method_sig["signature"]
                 manual.append(stmt)
             llm_sig = {**sig,
                        "signature": compound.append_body(
                            sig["signature"],
                            sig["body"].with_changes(body = manual)),
                        "body": None}
-                                         
+
+        llm_sig = self.get_prompt(llm_sig, conf)
+        llm_sig = self.update_metadata(llm_sig, conf)
+        if not llm_sig["generate"]:
+            return None
+            
         print("===={generate class}====")
         print("----{signature}----")
         print(stringify(llm_sig["signature"]))
         print("----{hash}----")
-        print("Old:", sig["old_codeid"])
-        print("New:", sig["codeid"])
+        print("Old:", llm_sig["old_promptid"])
+        print("New:", llm_sig["promptid"])
 
-        llm_result = self.generate_ClassDef(llm_sig)
+        llm_result = self.generate(llm_sig, conf)
         print("----{llm}----")
         print(stringify(llm_result))
 
@@ -231,9 +252,14 @@ class TransformCode(CSTTransformer):
         with_metadata = []
         for stmt in llm_result_sig["body"].body:
             if isinstance(stmt, cst.FunctionDef):
-                method_sig = self.signature_codeid(compound.extract_signature(stmt), ["FunctionDef"])
+                method_sig = self.update_metadata(
+                    self.get_prompt(
+                        compound.extract_metadata(stmt),
+                        fn_conf),
+                    fn_conf,
+                    autogen = True)
+
                 # Generate the body in a recursive call to the LLM!
-                method_sig["metadata"]["genid"] = method_sig["metadata"].pop("codeid")
                 method_sig["body"] = None
                 stmt = compound.unextract_metadata(method_sig)
             with_metadata.append(stmt)
@@ -300,92 +326,16 @@ def process_directory(root_dir: str):
                 process_file(filepath, merge_configs(*([builtin_config] + config_files)))
 
 def main():
-    parser = argparse.ArgumentParser(description="Regenerate Python functions/classes with docstring verification.")
-    parser.add_argument("source_dir", help="Root directory of Python source code")
+    parser = argparse.ArgumentParser(
+        description="Regenerate Python functions/classes with docstring verification.")
+    parser.add_argument(
+        "source_dir",
+        nargs="?",
+        default=".",
+        help="Root directory of Python source code (default: current directory)"
+    )
     args = parser.parse_args()
     process_directory(args.source_dir)
                 
 if __name__ == "__main__":
     main()
-    
-
-
-
-# def regenerate_class(node: ast.ClassDef, atok: asttokens.ASTTokens) -> str:
-#     # --- Step 1: Collect class info ---
-#     class_sig_doc = concat_signature_doc_comment(node, atok)
-    
-#     # --- Step 2: Collect existing methods ---
-#     methods_info: List[Dict] = []
-#     for n in node.body:
-#         if isinstance(n, ast.FunctionDef):
-#             sig_doc = concat_signature_doc_comment(n, atok)
-#             methods_info.append({
-#                 "node": n,
-#                 "sig_doc": sig_doc
-#             })
-    
-#     methods_str = "\n\n".join(m['sig_doc'] for m in methods_info)
-    
-#     # --- Step 3: Prepare prompt for LLM ---
-#     prompt = f"""
-# Regenerate the Python class given its signature, docstring, comments, and methods.
-# - Include CODEID comments for each method.
-# - Generate any missing methods (signatures and docstrings).
-# - If a method should be deleted, mark it for deletion.
-# - If a method should be changed, provide new signature, docstring, or comments,
-# but do not change methods unnecessarily.
-
-# "Class:
-# {class_sig_doc}
-
-# Methods:
-# {methods_str}
-
-# Return structured output:
-
-# {
-#   "add": ["new signature + docstring + comments"],
-#   "delete": ["old_method"],
-#   "update": {
-#       "existing_method": "new signature + docstring + comments",
-#       "another_method": "new signature + docstring + comments"
-#   }
-# }
-# """
-    
-#     # --- Step 4: Call LLM ---
-#     response = text_completion(model="openai/gpt-4", prompt=prompt)
-#     llm_result = parse_llm_output(response.choices[0].text)
-    
-#     # --- Step 6: Update the AST ---
-#     # Delete methods
-#     node.body = [
-#         n for n in node.body
-#         if not (isinstance(n, ast.FunctionDef) and n.name in llm_result.get("delete", []))
-#     ]
-    
-#     # Update methods
-#     for method_name, new_code in llm_result.get("update", {}).items():
-#         for i, n in enumerate(node.body):
-#             if isinstance(n, ast.FunctionDef) and n.name == method_name:
-#                 new_node = ast.parse(new_code).body[0]
-#                 # Preserve CODEID comments if present
-#                 new_node.body[0:0] = n.body[:1] if n.body and isinstance(n.body[0], ast.Expr) and hasattr(n.body[0], 'value') else []
-#                 node.body[i] = new_node
-    
-#     # Add new methods
-#     existing_method_names = {n.name for n in node.body if isinstance(n, ast.FunctionDef)}
-#     for method_name, new_code in llm_result.get("add", {}).items():
-#         if method_name not in existing_method_names:
-#             node.body.append(ast.parse(new_code).body[0])
-    
-#     # --- Step 7: Recursively regenerate method bodies ---
-#     for n in node.body:
-#         if isinstance(n, ast.FunctionDef):
-#             new_code, _ = process_node(n, atok)
-#             # Replace method body with regenerated body
-#             n.body = ast.parse(new_code).body[0].body
-    
-#     # --- Step 8: Convert AST back to code ---
-#     return atok.get_text(node)
