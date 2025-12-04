@@ -230,7 +230,8 @@ class TransformCode(CSTTransformer):
                        "signature": compound.append_body(
                            sig["signature"],
                            sig["body"].with_changes(body = manual)),
-                       "body": None}
+                       # Just for update_metadata to get generate() right
+                       "body": sig["body"].with_changes(body = manual)}
 
         llm_sig = self.get_prompt(llm_sig, conf)
         llm_sig = self.update_metadata(llm_sig, conf)
