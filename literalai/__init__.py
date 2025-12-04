@@ -75,10 +75,11 @@ class TransformCode(CSTTransformer):
     def transform_code(cls, src, **kw):
         return parse_module(src).visit(cls(**kw)).code
 
-    def __init__(self, config = {}):
+    def __init__(self, config = {}, **kw):
         self.config = config                 
         self.imports: Set[cst.SimpleStatementLine] = set()
-
+        self.options = kw
+        
     def get_config(self, config_path):
         return merge_configs(
             *[self.config.get(key)
@@ -160,6 +161,9 @@ class TransformCode(CSTTransformer):
         print("----{hash}----")
         print("Old:", sig["old_promptid"])
         print("New:", sig["promptid"])
+
+        if self.options.get("super_dry_run"):
+            return node
         
         llm_result = self.generate(sig, conf)
         
@@ -240,6 +244,9 @@ class TransformCode(CSTTransformer):
         print("Old:", llm_sig["old_promptid"])
         print("New:", llm_sig["promptid"])
 
+        if self.options.get("super_dry_run"):
+            return node
+        
         llm_result = self.generate(llm_sig, conf)
         print("----{llm}----")
         print(stringify(llm_result))
@@ -281,12 +288,15 @@ class TransformCode(CSTTransformer):
             body=list(self.imports) + list(updated_node.body)
         )    
     
-def process_file(filepath: str, config = {}):
+def process_file(filepath: str, config = {}, **kw):
     with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
-    new_source = TransformCode.transform_code(source, config=config)
-    # print("===={new source}====")
-    # print(new_source)
+    new_source = TransformCode.transform_code(source, config=config, **kw)
+    if kw.get("dry_run"):
+        print("===={new source}====")
+        print(new_source)
+    if kw.get("dry_run") or kw.get("super_dry_run"):
+        return
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(new_source)
 
@@ -302,7 +312,7 @@ def merge_configs(*configs):
         return configs[0]
     return merge_config(configs[0], merge_configs(*configs[1:]))
         
-def process_directory(root_dir: str):
+def process_directory(root_dir: str, **kw):
     root_dir = os.path.abspath(root_dir)
     stack = []  # stack of (dirpath, literalai.yml path or None)
     prev_depth = 0
@@ -323,19 +333,32 @@ def process_directory(root_dir: str):
             if fname.endswith(".py"):
                 filepath = os.path.join(dirpath, fname)
                 print(f"Processing {filepath}")
-                process_file(filepath, merge_configs(*([builtin_config] + config_files)))
+                process_file(filepath, merge_configs(*([builtin_config] + config_files)), **kw)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Regenerate Python functions/classes with docstring verification.")
+        description="""Generate implementations for Python functions
+and classes with only docstrings, and regenerate previously generated
+functions and classes where the docstrings have changed.""")
     parser.add_argument(
         "source_dir",
         nargs="?",
         default=".",
         help="Root directory of Python source code (default: current directory)"
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not write the updated code to disk, just print it to screen."
+    )
+    parser.add_argument(
+        "--super-dry-run",
+        action="store_true",
+        help="Do not update code, just show what would be updated. This does not do any LLM calls."
+    )
+
     args = parser.parse_args()
-    process_directory(args.source_dir)
+    process_directory(args.source_dir, dry_run=args.dry_run, super_dry_run=args.super_dry_run)
                 
 if __name__ == "__main__":
     main()
